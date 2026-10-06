@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      - name: Determine version
+        id: version
+        run: |
+          version=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "new=$version" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Abort if tag already exists
+        run: |
+          if git ls-remote --tags origin "refs/tags/${{ steps.version.outputs.new }}" | grep -q .; then
+            echo "::error::Tag ${{ steps.version.outputs.new }} already exists on remote"
+            exit 1
+          fi
+
+      - name: Tag and push
+        run: |
+          git tag "${{ steps.version.outputs.new }}"
+          git push origin "${{ steps.version.outputs.new }}"
+
+      - name: Build wheel
+        run: uv build
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.new }}" \
+            --generate-notes \
+            ${{ steps.version.outputs.prerelease == 'true' && '--prerelease' || '' }} \
+            dist/*.whl dist/*.tar.gz
+
+  deploy-pages:
+    needs: release
+    if: github.ref == 'refs/heads/main'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Generate PEP 503 package index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p "_pages/simple/backupgit"
+          {
+            echo '<!DOCTYPE html><html><body>'
+            gh release list --limit 100 --exclude-drafts --json tagName --jq '.[].tagName' | while read -r tag; do
+              gh release view "$tag" --json assets --jq '.assets[] | select(.name | endswith(".whl") or endswith(".tar.gz")) | .name' | while read -r name; do
+                echo "<a href=\"https://github.com/${GH_REPO}/releases/download/${tag}/${name}\">${name}</a><br>"
+              done
+            done
+            echo '</body></html>'
+          } > "_pages/simple/backupgit/index.html"
+
+          cat > _pages/simple/index.html <<'HTML'
+          <!DOCTYPE html><html><body>
+          <a href="backupgit/">backupgit</a>
+          </body></html>
+          HTML
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: '_pages'
+      - id: deployment
+        uses: actions/deploy-pages@v4
