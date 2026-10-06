@@ -7,10 +7,29 @@ mirror clones.
 
 Requires [uv](https://docs.astral.sh/uv/) and `git`.
 
+Run it straight from GitHub without installing anything:
+
 ```sh
 export GITHUB_TOKEN=...
-uv run backupgit <owner> <dest> [--skip-forks]
+uvx --from git+https://github.com/andrewtheguy/backupgit backupgit <owner> <dest> [--skip-forks]
 ```
+
+That runs the latest `main`. To run a specific release, add its tag to the URL:
+
+```sh
+uvx --from git+https://github.com/andrewtheguy/backupgit@<version> backupgit <owner> <dest>
+```
+
+Or use the released wheel from the package index:
+
+```sh
+uvx --index https://andrewtheguy.github.io/backupgit/simple/ backupgit@<version> <owner> <dest>
+```
+
+Replace `<version>` with a tag from the
+[releases page](https://github.com/andrewtheguy/backupgit/releases).
+
+From a checkout of this repository, use `uv run backupgit <owner> <dest>` instead.
 
 Repositories are written to `<dest>/<owner>/<repo>.git`. Running the command
 again fetches only what changed and prunes refs deleted upstream. Repositories
