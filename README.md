@@ -10,9 +10,12 @@ Requires [uv](https://docs.astral.sh/uv/) and `git`.
 Run it straight from GitHub without installing anything:
 
 ```sh
-export GITHUB_TOKEN=...
 uvx --from git+https://github.com/andrewtheguy/backupgit backupgit <owner> <dest> [--skip-forks]
 ```
+
+The GitHub token is taken from `GITHUB_TOKEN` if it is set, and otherwise from
+the [GitHub CLI](https://cli.github.com/) (`gh auth token`), so after
+`gh auth login` no further setup is needed.
 
 That runs the latest `main`. To run a specific release, add its tag to the URL:
 
@@ -35,7 +38,7 @@ Repositories are written to `<dest>/<owner>/<repo>.git`. Running the command
 again fetches only what changed and prunes refs deleted upstream. Repositories
 are cloned over HTTPS from github.com only; the token is handed to git through
 the environment and is never stored in the backups. The token is read only from
-`GITHUB_TOKEN`, never from the command line.
+`GITHUB_TOKEN` or the GitHub CLI, never from the command line.
 
 An existing directory is only updated if it is a mirror of the same repository;
 anything else is reported as a failure and left untouched. Transfers that stall

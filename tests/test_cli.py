@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 from typing import ClassVar
 
@@ -34,6 +35,7 @@ def backed_up(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(cli, "GitHub", FakeGitHub)
     monkeypatch.setattr(cli, "backup", lambda repo, dest, token: names.append(repo.name))
     monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+    monkeypatch.setattr(cli, "gh_token", lambda: None)
     return names
 
 
@@ -49,6 +51,55 @@ def test_empty_token_is_rejected(backed_up: list[str], monkeypatch: pytest.Monke
     monkeypatch.setenv(cli.TOKEN_ENV, "")
     with pytest.raises(SystemExit):
         cli.main(["acme", "dest"])
+
+
+def test_falls_back_to_the_github_cli_token(backed_up: list[str], monkeypatch: pytest.MonkeyPatch):
+    tokens: list[str] = []
+    monkeypatch.setattr(cli, "gh_token", lambda: "gho_cli")
+    monkeypatch.setattr(cli, "backup", lambda repo, dest, token: tokens.append(token))
+    FakeGitHub.listing = [repo("live")]
+
+    assert cli.main(["acme", "dest"]) == 0
+    assert tokens == ["gho_cli"]
+
+
+def test_environment_token_wins_over_the_github_cli(
+    backed_up: list[str], monkeypatch: pytest.MonkeyPatch
+):
+    tokens: list[str] = []
+    monkeypatch.setenv(cli.TOKEN_ENV, "s3cret")
+    monkeypatch.setattr(cli, "gh_token", lambda: pytest.fail("gh should not be asked"))
+    monkeypatch.setattr(cli, "backup", lambda repo, dest, token: tokens.append(token))
+    FakeGitHub.listing = [repo("live")]
+
+    assert cli.main(["acme", "dest"]) == 0
+    assert tokens == ["s3cret"]
+
+
+def test_gh_token_reads_the_cli_output(monkeypatch: pytest.MonkeyPatch):
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert cmd[:3] == ["gh", "auth", "token"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="gho_cli\n")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    assert cli.gh_token() == "gho_cli"
+
+
+def test_gh_token_is_none_when_not_logged_in(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 1, stdout=""),
+    )
+    assert cli.gh_token() is None
+
+
+def test_gh_token_is_none_when_gh_is_missing(monkeypatch: pytest.MonkeyPatch):
+    def missing(cmd: list[str], **kwargs: object) -> None:
+        raise FileNotFoundError("gh")
+
+    monkeypatch.setattr(cli.subprocess, "run", missing)
+    assert cli.gh_token() is None
 
 
 def test_skips_archived_repositories(backed_up: list[str], monkeypatch: pytest.MonkeyPatch):

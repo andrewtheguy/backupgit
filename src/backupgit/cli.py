@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -22,7 +23,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             f"The GitHub token used for the API and for cloning over HTTPS is read from "
-            f"the {TOKEN_ENV} environment variable."
+            f"the {TOKEN_ENV} environment variable, falling back to the GitHub CLI "
+            f"(`gh auth token`) when it is not set."
         ),
     )
     parser.add_argument("owner", help="GitHub organization or user name")
@@ -36,6 +38,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
+
+
+def gh_token() -> str | None:
+    """Return the token the GitHub CLI is logged in with, if any."""
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "token", "--hostname", "github.com"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 def log(message: str) -> None:
@@ -69,11 +89,11 @@ def run(owner: str, dest: Path, token: str, *, skip_forks: bool) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    # The token is only accepted through the environment so it never shows up
-    # in the process arguments.
-    token = os.environ.get(TOKEN_ENV)
+    # The token is only accepted through the environment or the GitHub CLI so
+    # it never shows up in the process arguments.
+    token = os.environ.get(TOKEN_ENV) or gh_token()
     if not token:
-        parser.error(f"a GitHub token is required: set {TOKEN_ENV}")
+        parser.error(f"a GitHub token is required: set {TOKEN_ENV} or log in with `gh auth login`")
 
     try:
         failures = run(args.owner, args.dest, token, skip_forks=args.skip_forks)

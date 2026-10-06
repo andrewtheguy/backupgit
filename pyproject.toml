@@ -1,6 +1,6 @@
 [project]
 name = "backupgit"
-version = "0.0.1"
+version = "0.0.2"
 description = "Back up a GitHub organization's or user's non-archived repositories as bare mirror clones"
 readme = "README.md"
 authors = [
