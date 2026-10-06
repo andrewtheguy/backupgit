@@ -1,0 +1,96 @@
+from pathlib import Path
+from typing import ClassVar
+
+import pytest
+
+from backupgit import cli
+from backupgit.github import GitHubError, Repo
+from backupgit.mirror import GitError
+
+
+def repo(name: str, *, archived: bool = False, fork: bool = False) -> Repo:
+    return Repo(owner="acme", name=name, clone_url=f"url/{name}", archived=archived, fork=fork)
+
+
+class FakeGitHub:
+    listing: ClassVar[list[Repo]] = []
+
+    def __init__(self, token: str) -> None:
+        self.token = token
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        pass
+
+    def repos(self, owner: str):
+        yield from self.listing
+
+
+@pytest.fixture
+def backed_up(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    names: list[str] = []
+    monkeypatch.setattr(cli, "GitHub", FakeGitHub)
+    monkeypatch.setattr(cli, "backup", lambda repo, dest, token: names.append(repo.name))
+    monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+    return names
+
+
+def test_requires_a_token(backed_up: list[str], capsys: pytest.CaptureFixture[str]):
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["acme", "dest"])
+
+    assert excinfo.value.code == 2
+    assert "token is required" in capsys.readouterr().err
+
+
+def test_empty_token_is_rejected(backed_up: list[str], monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv(cli.TOKEN_ENV, "")
+    with pytest.raises(SystemExit):
+        cli.main(["acme", "dest"])
+
+
+def test_skips_archived_repositories(backed_up: list[str], monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv(cli.TOKEN_ENV, "s3cret")
+    FakeGitHub.listing = [repo("live"), repo("old", archived=True), repo("forked", fork=True)]
+
+    assert cli.main(["acme", "dest"]) == 0
+    assert backed_up == ["live", "forked"]
+
+
+def test_skip_forks(backed_up: list[str]):
+    FakeGitHub.listing = [repo("live"), repo("forked", fork=True)]
+
+    assert cli.main(["acme", "dest", "--token", "s3cret", "--skip-forks"]) == 0
+    assert backed_up == ["live"]
+
+
+def test_continues_after_a_failure_and_exits_non_zero(
+    monkeypatch: pytest.MonkeyPatch, backed_up: list[str], capsys: pytest.CaptureFixture[str]
+):
+    def flaky(repo: Repo, dest: Path, token: str) -> None:
+        if repo.name == "bad":
+            raise GitError("git clone exited with status 128")
+        backed_up.append(repo.name)
+
+    monkeypatch.setattr(cli, "backup", flaky)
+    FakeGitHub.listing = [repo("bad"), repo("good")]
+
+    assert cli.main(["acme", "dest", "--token", "s3cret"]) == 1
+    assert backed_up == ["good"]
+    err = capsys.readouterr().err
+    assert "1 of 2 repositories backed up" in err
+    assert "failed: bad" in err
+
+
+def test_api_error_exits_non_zero(
+    monkeypatch: pytest.MonkeyPatch, backed_up: list[str], capsys: pytest.CaptureFixture[str]
+):
+    def boom(self: FakeGitHub, owner: str):
+        raise GitHubError("GET https://api.github.com/users/acme: 401 Unauthorized")
+
+    monkeypatch.setattr(FakeGitHub, "repos", boom)
+
+    assert cli.main(["acme", "dest", "--token", "s3cret"]) == 1
+    assert "401 Unauthorized" in capsys.readouterr().err
