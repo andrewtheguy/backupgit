@@ -59,10 +59,21 @@ def test_skips_archived_repositories(backed_up: list[str], monkeypatch: pytest.M
     assert backed_up == ["live", "forked"]
 
 
-def test_skip_forks(backed_up: list[str]):
+def test_token_is_not_accepted_as_an_argument(
+    backed_up: list[str], monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv(cli.TOKEN_ENV, "s3cret")
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["acme", "dest", "--token", "s3cret"])
+
+    assert excinfo.value.code == 2
+
+
+def test_skip_forks(backed_up: list[str], monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv(cli.TOKEN_ENV, "s3cret")
     FakeGitHub.listing = [repo("live"), repo("forked", fork=True)]
 
-    assert cli.main(["acme", "dest", "--token", "s3cret", "--skip-forks"]) == 0
+    assert cli.main(["acme", "dest", "--skip-forks"]) == 0
     assert backed_up == ["live"]
 
 
@@ -75,9 +86,10 @@ def test_continues_after_a_failure_and_exits_non_zero(
         backed_up.append(repo.name)
 
     monkeypatch.setattr(cli, "backup", flaky)
+    monkeypatch.setenv(cli.TOKEN_ENV, "s3cret")
     FakeGitHub.listing = [repo("bad"), repo("good")]
 
-    assert cli.main(["acme", "dest", "--token", "s3cret"]) == 1
+    assert cli.main(["acme", "dest"]) == 1
     assert backed_up == ["good"]
     err = capsys.readouterr().err
     assert "1 of 2 repositories backed up" in err
@@ -91,6 +103,7 @@ def test_api_error_exits_non_zero(
         raise GitHubError("GET https://api.github.com/users/acme: 401 Unauthorized")
 
     monkeypatch.setattr(FakeGitHub, "repos", boom)
+    monkeypatch.setenv(cli.TOKEN_ENV, "s3cret")
 
-    assert cli.main(["acme", "dest", "--token", "s3cret"]) == 1
+    assert cli.main(["acme", "dest"]) == 1
     assert "401 Unauthorized" in capsys.readouterr().err

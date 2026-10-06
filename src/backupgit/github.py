@@ -11,6 +11,8 @@ from backupgit import __version__
 API = "https://api.github.com"
 PER_PAGE = 100
 TIMEOUT = httpx.Timeout(30.0)
+# GitHub App installation access tokens cannot call /user.
+INSTALLATION_TOKEN_PREFIX = "ghs_"
 
 
 class GitHubError(Exception):
@@ -57,6 +59,7 @@ class GitHub:
             timeout=TIMEOUT,
             transport=transport,
         )
+        self._is_installation = token.startswith(INSTALLATION_TOKEN_PREFIX)
 
     def __enter__(self) -> Self:
         return self
@@ -85,6 +88,10 @@ class GitHub:
         login = account["login"]
         if account["type"] == "Organization":
             return f"/orgs/{login}/repos", {"type": "all"}
+        if self._is_installation:
+            # An installation token has no user behind it; list what the
+            # installation was granted instead.
+            return "/installation/repositories", {}
         # /users/{owner}/repos only lists public repositories, so when the token
         # belongs to the owner use the authenticated endpoint to get private ones too.
         me = self._get("/user").json()
@@ -97,8 +104,13 @@ class GitHub:
         url, params = self._repos_endpoint(owner)
         response = self._get(url, {**params, "per_page": PER_PAGE})
         while True:
-            for item in response.json():
-                yield Repo.from_api(item)
+            data = response.json()
+            # /installation/repositories wraps the list in an object.
+            items = data["repositories"] if isinstance(data, dict) else data
+            for item in items:
+                repo = Repo.from_api(item)
+                if repo.owner.casefold() == owner.casefold():
+                    yield repo
             next_url = response.links.get("next", {}).get("url")
             if next_url is None:
                 return

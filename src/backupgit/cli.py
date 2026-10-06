@@ -20,16 +20,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Back up all non-archived repositories of a GitHub organization or user "
             "as bare mirror clones."
         ),
+        epilog=(
+            f"The GitHub token used for the API and for cloning over HTTPS is read from "
+            f"the {TOKEN_ENV} environment variable."
+        ),
     )
     parser.add_argument("owner", help="GitHub organization or user name")
     parser.add_argument(
         "dest",
         type=Path,
         help="directory to back up into, as <DEST>/<owner>/<repo>.git (created if missing)",
-    )
-    parser.add_argument(
-        "--token",
-        help=f"GitHub token used for the API and for cloning over HTTPS [env: {TOKEN_ENV}]",
     )
     parser.add_argument(
         "--skip-forks", action="store_true", help="skip repositories that are forks"
@@ -69,9 +69,11 @@ def run(owner: str, dest: Path, token: str, *, skip_forks: bool) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    token = args.token or os.environ.get(TOKEN_ENV)
+    # The token is only accepted through the environment so it never shows up
+    # in the process arguments.
+    token = os.environ.get(TOKEN_ENV)
     if not token:
-        parser.error(f"a GitHub token is required: pass --token or set {TOKEN_ENV}")
+        parser.error(f"a GitHub token is required: set {TOKEN_ENV}")
 
     try:
         failures = run(args.owner, args.dest, token, skip_forks=args.skip_forks)

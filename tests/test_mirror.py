@@ -40,6 +40,14 @@ def test_git_env_carries_token_only_as_auth_header():
     assert env["GIT_CONFIG_VALUE_0"] == "Authorization: Basic eC1hY2Nlc3MtdG9rZW46czNjcmV0"
 
 
+def test_git_env_aborts_stalled_transfers():
+    env = git_env("s3cret")
+
+    assert env["GIT_CONFIG_COUNT"] == "3"
+    assert (env["GIT_CONFIG_KEY_1"], env["GIT_CONFIG_VALUE_1"]) == ("http.lowSpeedLimit", "1000")
+    assert (env["GIT_CONFIG_KEY_2"], env["GIT_CONFIG_VALUE_2"]) == ("http.lowSpeedTime", "300")
+
+
 def test_backup_creates_bare_mirror_in_owner_directory(upstream: Path, tmp_path: Path):
     dest = tmp_path / "dest"
     repo = make_repo(upstream)
@@ -68,6 +76,33 @@ def test_backup_syncs_incrementally(upstream: Path, tmp_path: Path):
     target = target_path(repo, dest)
     assert git("rev-parse", "main", cwd=target) == git("rev-parse", "main", cwd=upstream)
     assert git("branch", "--format=%(refname:short)", cwd=target).split() == ["added", "main"]
+
+
+def test_backup_rejects_target_with_another_origin(upstream: Path, tmp_path: Path):
+    dest = tmp_path / "dest"
+    repo = make_repo(upstream)
+    backup(repo, dest, "s3cret")
+    target = target_path(repo, dest)
+    before = git("rev-parse", "main", cwd=target)
+    git("commit", "--quiet", "--allow-empty", "-m", "second", cwd=upstream)
+    git("remote", "set-url", "origin", "https://github.com/acme/other.git", cwd=target)
+
+    with pytest.raises(GitError, match="not a backup of"):
+        backup(repo, dest, "s3cret")
+
+    assert git("rev-parse", "main", cwd=target) == before
+
+
+def test_backup_rejects_target_that_is_not_a_mirror(upstream: Path, tmp_path: Path):
+    dest = tmp_path / "dest"
+    repo = make_repo(upstream)
+    target = target_path(repo, dest)
+    target.parent.mkdir(parents=True)
+    git("clone", "--quiet", "--bare", upstream, target, cwd=tmp_path)
+    git("remote", "set-url", "origin", repo.clone_url, cwd=target)
+
+    with pytest.raises(GitError, match="not a mirror clone"):
+        backup(repo, dest, "s3cret")
 
 
 def test_backup_replaces_leftover_of_interrupted_clone(upstream: Path, tmp_path: Path):
